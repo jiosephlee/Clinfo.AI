@@ -19,12 +19,12 @@ class ClinfoAI:
 
     def init_engine(self):
         if self.engine  == "PubMed":
-            ARCHITECTURE_PATH = Path('../prompts/PubMed/Architecture_3/master.json')
+            ARCHITECTURE_PATH = Path('../prompts/PubMed/Architecture_1/master.json')
             self.NEURAL_RETRIVER   = Neural_Retriever_PubMed(architecture_path=ARCHITECTURE_PATH ,verbose=False,debug=False,open_ai_key=self.openai_key,email=self.email)
             print("PubMed Retriever Initialized")
 
         elif self.engine  == "SemanticScholar":
-            ARCHITECTURE_PATH    = Path('../prompts/SemanticScholar/Architecture_3/master.json')
+            ARCHITECTURE_PATH    = Path('../prompts/SemanticScholar/Architecture_1/master.json')
             self.NEURAL_RETRIVER      = Neural_Retriever_Semantic_Scholar(architecture_path=ARCHITECTURE_PATH ,verbose=True,debug=False,open_ai_key=self.openai_key,email=self.email)
         else:
             raise Exception("Invalid Engine")
@@ -116,7 +116,7 @@ class ClinfoAI:
             synthesis = "Internal Error"
         
         if return_articles:
-            return synthesis , article_summaries, irrelevant_articles,queries
+            return {"synthesis": synthesis , "article_summaries": article_summaries, "irrelevant_articles" : irrelevant_articles, "queries" : queries}
         
         return synthesis 
 
