@@ -31,7 +31,7 @@ from langchain.prompts import PromptTemplate, ChatPromptTemplate, HumanMessagePr
 from datetime import datetime, timedelta
 
 def subtract_n_years(date_str,n=20):
-   
+
     date     = datetime.strptime(date_str, "%Y/%m/%d")  # Parse the given date string
     new_year = date.year - n                            # Subtract n years
 
@@ -72,7 +72,7 @@ class Neural_Retriever_PubMed:
         if self.verbose:
             self.architecture.print_architecture()
 
-    def generate_pubmed_query(self,question: str, model: str = "gpt-3.5-turbo",is_reconstruction=False,failure_cases =None) -> str:
+    def generate_pubmed_query(self,question: str, model: str = "gpt-3.5-turbo",is_reconstruction=False,failure_cases =None, retry = False) -> str:
         """
         Generates a PubMed query from a clinical question using OpenAI's API
 
@@ -104,11 +104,13 @@ class Neural_Retriever_PubMed:
 
             ### Make API CALL ###
             chat_prompt = ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])
-            chat        = ChatOpenAI(temperature = self.temperature,
+            temp = self.temperature
+            if retry:
+                temp = 0.7
+            chat        = ChatOpenAI(temperature = temp,
                                       model      = model,
                                       max_tokens = 1024,
                                       n          = 1,
-                                      stop       = None,
                                       request_timeout=self.time_out  
                                                   
                                      )
@@ -122,7 +124,7 @@ class Neural_Retriever_PubMed:
          
         
 
-    def search_pubmed(self,question: str, num_results: int, num_query_attempts: int = 1,verbose:bool=False,restriction_date=None) -> set:
+    def search_pubmed(self,question: str, num_results: int, num_query_attempts: int = 1,verbose:bool=False,restriction_date=None, years_back = 20, retry = False) -> set:
         """
         Searches PubMed for articles relevant to the given question
 
@@ -142,14 +144,14 @@ class Neural_Retriever_PubMed:
         search_ids     = set()
         search_queries = set()
         for _ in range(num_query_attempts):
-            pubmed_query = self.generate_pubmed_query(question,failure_cases = failure_cases)
+            pubmed_query = self.generate_pubmed_query(question,failure_cases = failure_cases, retry = retry)
 
             if restriction_date != None:
                 if self.verbose:
                     print(f"Date Restricted to : {restriction_date}")
-                lower_limit  =  subtract_n_years(restriction_date)
+                #changed n to 10
+                lower_limit  =  subtract_n_years(restriction_date, n= years_back)
                 pubmed_query = pubmed_query + f" AND {lower_limit}:{restriction_date}[dp]"
-
             if verbose:
                 print("********************************************************")
                 print(f"Generated pubmed query: {pubmed_query}\n")
@@ -200,8 +202,8 @@ class Neural_Retriever_PubMed:
         return article_data
      
 
-
-    def is_article_relevant(self,article_text:str, question:str, model="gpt-4",is_reconstruction=False):
+    # The code originally had used gpt-4 for this portion
+    def is_article_relevant(self,article_text:str, question:str, model="gpt-3.5-turbo",is_reconstruction=False):
         """Returns True if the article is relevant to the query, False otherwise
 
         Args:
@@ -237,7 +239,6 @@ class Neural_Retriever_PubMed:
                                       model      = model,
                                       max_tokens = 512,
                                       n          = 1,
-                                      stop       = None,
                                       request_timeout=self.time_out  
                                                   
                                      )
@@ -442,7 +443,6 @@ class Neural_Retriever_PubMed:
                                       model      = model,
                                       max_tokens = 1024,
                                       n          = 1,
-                                      stop       = None,
                                       request_timeout=self.time_out  
                                                   
                                      )
@@ -450,8 +450,46 @@ class Neural_Retriever_PubMed:
             answer      = response.content
             time.sleep(self.wait)
             return answer
+    #added
+    def process_text(self,text,question):
+        """  Create a helper function for ThreadPoolExecutor"""
+     
+        try: 
+            #try:
+            text_is_relevant = self.is_article_relevant(text, question)           # (GPT) Determine if the article is relevant with gpt
 
-
+            # print(citation)
+            # print("~" * 10 + f"\n{abstract}")
+            # print("~" * 10 + f"\nArticle is relevant? = {article_is_relevant}")
+            
+        
+            #    # Modiffication (even if the article is not relevant, we still want to save it )
+            #except:
+            #    title               = article["MedlineCitation"]['Article']['ArticleTitle']
+            ##    abstract            = "not provided"
+            #    article_is_relevant = False
+            #    print("Could not find abstract for article: ",title)
+            text_json =  {
+                    "abstract": text,
+                    "is_relevant": text_is_relevant,
+                }
+            
+            if text_is_relevant:
+                
+                summary = self.summarize_study(article_text = text, 
+                                          question = question, 
+                                          model="gpt-3.5-turbo")
+                
+                text_json["summary"] = summary
+            
+            return text_json
+        
+        except KeyError as err:
+            print("Error retrieving article data:", err)
+            return None
+        except ValueError as err:
+             print("Error: ", err)  # TODO: Handle this better
+             return None
         
     def process_article(self,article,question):
         """  Create a helper function for ThreadPoolExecutor"""
@@ -463,9 +501,9 @@ class Neural_Retriever_PubMed:
             abstract            = self.reconstruct_abstract(abstract)                    # Reconstruct the abstract
             article_is_relevant = self.is_article_relevant(abstract, question)           # (GPT) Determine if the article is relevant with gpt
             citation            = self.construct_citation(article)                       # Construct the AMA citation
-            print(citation)
-            print("~" * 10 + f"\n{abstract}")
-            print("~" * 10 + f"\nArticle is relevant? = {article_is_relevant}")
+            # print(citation)
+            # print("~" * 10 + f"\n{abstract}")
+            # print("~" * 10 + f"\nArticle is relevant? = {article_is_relevant}")
             title = article["MedlineCitation"]["Article"]["ArticleTitle"]
             url   = (f"https://pubmed.ncbi.nlm.nih.gov/"
                     f"{article['MedlineCitation']['PMID']}/")
@@ -508,8 +546,53 @@ class Neural_Retriever_PubMed:
         except ValueError as err:
              print("Error: ", err)  # TODO: Handle this better
              return None
+ 
+            
+        except KeyError as err:
+             if "PMID" in article['MedlineCitation'].keys():
+                 print(f"Could not find {err} for article with PMID = "
+                     f"{article['MedlineCitation']['PMID']}")
+             else:
+                 print("Error retrieving article data:", err)
+             return None
+        except ValueError as err:
+             print("Error: ", err)  # TODO: Handle this better
+             return None
 
 
+    def summarize_each_text(self,articles, question, num_workers=8):
+        relevant_article_summaries  = []
+        irelevant_article_summaries = []
+
+        # Use ThreadPoolExecutor to process articles in parallel
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            # Submit all articles for processing
+            futures = [
+                        executor.submit(self.process_text, article,question) for article in articles
+            ]
+
+            # Collect results as they become available
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
+                except:
+                    pass
+                    print("Error processing article. Server is probably overloaded. waiting 10 seconds")
+                    time.sleep(20)
+                    print("Lets try agian")
+                    result = future.result()
+                ### Organize results into relevant and irrelevant articles
+                try:
+                    if result["is_relevant"]:
+                        relevant_article_summaries.append(result)
+                    else:
+                        irelevant_article_summaries.append(result)
+                except:
+                    pass
+            
+
+        return relevant_article_summaries, irelevant_article_summaries
+    
     def summarize_each_article(self,articles, question, num_workers=8):
         relevant_article_summaries  = []
         irelevant_article_summaries = []
@@ -544,7 +627,6 @@ class Neural_Retriever_PubMed:
         return relevant_article_summaries, irelevant_article_summaries
 
 
-
     def build_citations_and_summaries(self,article_summaries:dict,with_url:bool=False) -> tuple:
         """ Structures citations and summaries in a readable format for gpt-3.5-turbo
             Input:
@@ -572,9 +654,108 @@ class Neural_Retriever_PubMed:
          
         return article_summaries_with_citations,citations
     
+    # added
+    def build_summaries(self,article_summaries:dict) -> tuple:
+        """ Structures summaries in a readable format for gpt-3.5-turbo
+            Input:
+                article_summaries: list of dictionaries with keys: citation, summary
+            Output: 
+                article_summaries_proc: str
+        """
+        article_summaries_proc = []
+        for i,summary in enumerate(article_summaries):
+
+            article_summaries_proc.append(f"{summary['summary']}")
+        article_summaries_proc = "\n\n--------------------------------------------------------------\n\n".join(article_summaries_proc )
+        return article_summaries_proc
     
 
     def synthesize_all_articles(self,summaries, question,prompt_dict={"type":"automatic"},  model="gpt-4",is_reconstruction=False,with_url=False):
+        article_summaries_str,citations = self.build_citations_and_summaries(article_summaries = summaries,  with_url = with_url) 
+ 
+        system_prompt  =  self.architecture.get_prompt("synthesize_prompt","system").format()
+
+        if prompt_dict["type"] == "automatic":
+            user_prompt   =  self.architecture.get_prompt("synthesize_prompt","template")
+            
+        elif prompt_dict["type"] == "Custom":
+            user_prompt = prompt_dict["Synthesis"] 
+
+        if self.debug:
+            print(f"User prompt: {user_prompt}")
+            print(f"System prompt: {system_prompt}")
+            
+  
+            
+        if is_reconstruction:
+            message_ =  [{"role":"system","content":system_prompt}, {"role": "user","content": user_prompt.format(question=question,article_summaries_str=article_summaries_str)}]
+            return message_ 
+        
+        else:         
+            system_message_prompt = SystemMessagePromptTemplate.from_template(system_prompt)
+            human_message_prompt  = HumanMessagePromptTemplate(
+                                                prompt    = PromptTemplate(template = user_prompt.format(question="{question}",article_summaries_str="{article_summaries_str}"),
+                                                input_variables   = ["question","article_summaries_str"],
+                                             ))
+
+            print(system_message_prompt)
+            print(human_message_prompt)
+            chat_prompt = ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])
+            print(chat_prompt)
+            print('--------\n\n------')
+            chat        = ChatOpenAI(temperature = self.temperature,
+                                      model      = model,
+                                      max_tokens = 1024,
+                                      n          = 1,
+                                      stop       = None,
+                                      request_timeout=600 
+                                                  
+                                     )
+            response    = chat(chat_prompt.format_prompt(question=question,article_summaries_str=article_summaries_str).to_messages())
+            synthesis   = response.content
+
+            print("=#" * 20)
+            print(synthesis)
+
+            if with_url:
+                synthesis = synthesis  + "\n\n" + "References:\n" +  citations
+
+        
+            return synthesis
+
+    # added
+        
+    def answer_question_with_articles(self,summaries, question,prompt_dict={"type":"automatic"},  model="gpt-3.5-turbo",is_reconstruction=False,with_url=False):
+        print("------processing summaries into readable form-------")
+        article_summaries_str = self.build_summaries(article_summaries = summaries) 
+        print("------getting prompts------")
+        system_prompt  =  self.architecture.get_prompt("QA_prompt","system").format()
+        if prompt_dict["type"] == "automatic":
+            user_prompt   =  self.architecture.get_prompt("QA_prompt","template")
+        system_message_prompt = SystemMessagePromptTemplate.from_template(system_prompt)
+        human_message_prompt  = HumanMessagePromptTemplate(
+                                            prompt    = PromptTemplate(template = user_prompt.format(question="{question}",article_summaries_str="{article_summaries_str}"),
+                                            input_variables   = ["question","article_summaries_str"],
+                                            ))
+        chat_prompt = ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])
+        chat        = ChatOpenAI(temperature = self.temperature,
+                                    model      = model,
+                                    n          = 1,
+                                    request_timeout=600 
+                                                
+                                    )
+        print("------getting response------")
+        # modified to return the prompt so we can feed this into not langchain's abstraction of chatgpt but just gpt API
+        return chat_prompt.format_prompt(question=question,article_summaries_str=article_summaries_str).to_messages()
+        response    = chat(chat_prompt.format_prompt(question=question,article_summaries_str=article_summaries_str).to_messages())
+        synthesis   = response.content
+
+        # print("=#" * 20)
+        # print(synthesis)
+
+        return synthesis
+        
+    def answer_with_articles(self,summaries, question,prompt_dict={"type":"automatic"},  model="gpt-4",is_reconstruction=False,with_url=False):
         article_summaries_str,citations = self.build_citations_and_summaries(article_summaries = summaries,  with_url = with_url) 
  
         system_prompt  =  self.architecture.get_prompt("synthesize_prompt","system").format()
@@ -622,8 +803,7 @@ class Neural_Retriever_PubMed:
                 synthesis = synthesis  + "\n\n" + "References:\n" +  citations
 
         
-            return synthesis
-        
+            return synthesis  
     
     def PIPE_LINE(self,question:str):
         """ This runs the entire pipeline, intended for testing"""
@@ -644,7 +824,6 @@ class Neural_Retriever_PubMed:
         synthesis =   self.synthesize_all_articles(article_summaries, question)
 
         return synthesis, article_summaries, irrelevant_articles, articles, article_ids, pubmed_queries,
-
 
     def reconstruct_relevant_helper(self,dict_,question):
         for id  in range(0,len(dict_)):

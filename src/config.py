@@ -1,5 +1,5 @@
-OPENAI_API_KEY = 'YOUR OPEN API KEY'
+OPENAI_API_KEY = ''
 NCBI_API_KEY   = None
-EMAIL          = None
+EMAIL          = ''
 SESSION_TYPE   = 'filesystem'
 SECRET_KEY     = 'YOUR SECRET KEY'
